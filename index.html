@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Notion Task Manager</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+textarea { width: 100%; height: 200px; margin-bottom: 10px; }
+button { padding: 5px 10px; margin-right: 5px; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+th, td { border: 1px solid #ccc; padding: 5px; }
+th { background: #f4f4f4; }
+td[contenteditable="true"] { background-color: #fdfdfd; }
+</style>
+</head>
+<body>
+
+<h2>Mini Notion Task Manager</h2>
+
+<h3>Paste Tasks (Structured Format)</h3>
+<p>Example format:</p>
+<pre>
+Task Name: Build /users API route
+Assigned AI: Qwen
+Folder: backend/
+Status: Pending
+Priority: High
+---
+Task Name: Create landing page
+Assigned AI: ChatGPT
+Folder: frontend/starter
+Status: Pending
+Priority: Medium
+</pre>
+
+<textarea id="tasksInput" placeholder="Paste tasks here..."></textarea><br>
+<button id="parseBtn">Parse Tasks</button>
+<button id="pushBtn">Push to Notion</button>
+<button id="fetchBtn">Fetch Existing Tasks from Notion</button>
+
+<h3>Preview</h3>
+<table id="previewTable">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Task Name</th>
+      <th>Assigned AI</th>
+      <th>Folder</th>
+      <th>Status</th>
+      <th>Priority</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+let tasks = [];
+
+// Parse pasted tasks
+document.getElementById('parseBtn').addEventListener('click', () => {
+  const input = document.getElementById('tasksInput').value.trim();
+  const blocks = input.split('---').map(b => b.trim()).filter(Boolean);
+
+  tasks = blocks.map(block => {
+    const obj = {};
+    block.split('\n').forEach(line => {
+      const [key, ...rest] = line.split(':');
+      obj[key.trim().toLowerCase().replace(/ /g,'')] = rest.join(':').trim();
+    });
+    return {
+      taskName: obj['taskname'],
+      assignedAI: obj['assignedai'],
+      folder: obj['folder'],
+      status: obj['status'],
+      priority: obj['priority']
+    };
+  });
+
+  renderPreview();
+});
+
+// Render preview table
+function renderPreview() {
+  const tbody = document.querySelector('#previewTable tbody');
+  tbody.innerHTML = '';
+  tasks.forEach((t, i) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${i+1}</td>
+      <td contenteditable="true" oninput="updateTaskField(${i}, 'taskName', this.innerText)">${t.taskName}</td>
+      <td contenteditable="true" oninput="updateTaskField(${i}, 'assignedAI', this.innerText)">${t.assignedAI}</td>
+      <td contenteditable="true" oninput="updateTaskField(${i}, 'folder', this.innerText)">${t.folder}</td>
+      <td contenteditable="true" oninput="updateTaskField(${i}, 'status', this.innerText)">${t.status}</td>
+      <td contenteditable="true" oninput="updateTaskField(${i}, 'priority', this.innerText)">${t.priority}</td>
+      <td>
+        <button onclick="saveTask(${i})">Save</button>
+        <button onclick="deleteTaskNotion(${i})">Delete</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+// Update local task field
+function updateTaskField(index, field, value) {
+  tasks[index][field] = value.trim();
+}
+
+// Push new tasks to Notion
+document.getElementById('pushBtn').addEventListener('click', async () => {
+  if(tasks.length === 0) { alert('No tasks to push!'); return; }
+  try {
+    const res = await fetch('http://localhost:3000/push-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks })
+    });
+    const data = await res.json();
+    if(data.success) {
+      alert('Tasks pushed to Notion successfully!');
+      // Assign returned IDs to local tasks
+      data.results.forEach((r, i) => tasks[i].id = r.id);
+      renderPreview();
+      document.getElementById('tasksInput').value = '';
+    } else {
+      alert('Error: ' + data.error);
+    }
+  } catch(err) {
+    console.error(err);
+    alert('Error connecting to backend.');
+  }
+});
+
+// Fetch existing tasks from Notion
+document.getElementById('fetchBtn').addEventListener('click', async () => {
+  try {
+    const res = await fetch('http://localhost:3000/get-tasks');
+    const data = await res.json();
+    if(data.success) {
+      tasks = data.tasks.map(t => ({ ...t }));
+      renderPreview();
+    } else {
+      alert('Error fetching tasks: ' + data.error);
+    }
+  } catch(err) {
+    console.error(err);
+    alert('Error connecting to backend.');
+  }
+});
+
+// Save edited task to Notion
+async function saveTask(index) {
+  const task = tasks[index];
+  if(!task.id) { alert('Task not pushed to Notion yet'); return; }
+  try {
+    const res = await fetch('http://localhost:3000/update-task', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: task.id, task })
+    });
+    const data = await res.json();
+    if(data.success) alert('Task updated in Notion!');
+    else alert('Error: ' + data.error);
+  } catch(err) {
+    console.error(err);
+    alert('Error connecting to backend.');
+  }
+}
+
+// Delete task from Notion
+async function deleteTaskNotion(index) {
+  const task = tasks[index];
+  if(!task.id) { 
+    tasks.splice(index, 1); 
+    renderPreview(); 
+    return; 
+  }
+  try {
+    const res = await fetch(`http://localhost:3000/delete-task/${task.id}`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if(data.success) {
+      alert('Task deleted in Notion!');
+      tasks.splice(index, 1);
+      renderPreview();
+    } else alert('Error: ' + data.error);
+  } catch(err) {
+    console.error(err);
+    alert('Error connecting to backend.');
+  }
+}
+</script>
+
+</body>
+</html>
